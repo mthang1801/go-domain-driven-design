@@ -1,0 +1,23 @@
+linters:
+  enable:
+    - gofmt
+    - goimports
+    - golint
+    - staticcheck
+    - unused
+    - errcheck
+    - vet
+  linters-settings:
+    gofmt:
+      simplify: true
+    golint:
+      min-confidence: 0.8
+  issues:
+      exclude-rules:
+        - path: _test\.go
+          linters:
+            - errcheck
+  run:
+    deadline: 5m
+    tests: true
+
