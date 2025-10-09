@@ -1,52 +1,76 @@
-# **Cấu trúc thư mục**
+# 🚀 Go Tutorial Project
 
-Cấu trúc thư mục được tổ chức như sau:
+Project Go với tính năng **auto-reload** sử dụng Air.
 
-project/
-├── cmd/
-│ └── main.go // Điểm khởi chạy ứng dụng
-├── internal/
-│ ├── domain/
-│ │ ├── agreement/
-│ │ │ ├── entities/ // Các entity (ví dụ: Agreement)
-│ │ │ ├── valueobjects/ // Các value object (ví dụ: Email)
-│ │ │ ├── repositories/ // Interface cho repository
-│ │ │ └── services/ // Domain services (nếu cần)
-│ │ └── feature_test_product/
-│ │ ├── entities/
-│ │ ├── valueobjects/
-│ │ ├── repositories/
-│ │ └── services/
-│ ├── application/
-│ │ ├── agreement/
-│ │ │ ├── dto/ // Data Transfer Objects
-│ │ │ ├── usecases/ // Các use case (ví dụ: CreateAgreement)
-│ │ │ └── services/ // Application services
-│ │ └── feature_test_product/
-│ │ ├── dto/
-│ │ ├── usecases/
-│ │ └── services/
-│ ├── infrastructure/
-│ │ ├── agreement/
-│ │ │ ├── repositories/ // Triển khai repository (ví dụ: SQL)
-│ │ │ ├── orm/ // ORM (nếu dùng GORM)
-│ │ │ └── events/ // Xử lý sự kiện
-│ │ ├── database/ // Cấu hình database
-│ │ └── telegram/ // Tích hợp dịch vụ bên ngoài
-│ └── presentation/
-│ ├── portal/
-│ │ ├── handlers/ // Handler cho API portal
-│ │ └── routes/ // Định nghĩa tuyến đường
-│ ├── mobile/
-│ │ ├── handlers/
-│ │ └── routes/
-│ ├── external/
-│ │ ├── handlers/
-│ │ └── routes/
-│ └── presentation.go // Logic chia sẻ (nếu cần)
-├── shared/
-│ ├── mappers/ // Chuyển đổi giữa các tầng
-│ ├── enum/ // Các enum
-│ └── constant/ // Các hằng số
-├── go.mod
-└── go.sum
+## ✨ Tính năng
+
+- 🔄 **Auto-reload**: Tự động rebuild và restart khi có thay đổi code
+- 🛠️ **Hot reload**: Không cần dừng và chạy lại ứng dụng
+- 📁 **Cấu trúc project**: Tổ chức code theo best practices
+- 🎯 **Makefile**: Các lệnh tiện ích để phát triển
+
+## 🚀 Cách sử dụng
+
+### 1. Chạy với Watch Mode (Khuyến nghị)
+```bash
+make watch
+```
+hoặc
+```bash
+air
+```
+
+### 2. Chạy thông thường
+```bash
+make run
+```
+
+### 3. Build ứng dụng
+```bash
+make build
+```
+
+### 4. Chạy tests
+```bash
+make test
+```
+
+### 5. Format code
+```bash
+make fmt
+```
+
+## 📁 Cấu trúc project
+
+```
+go-tutorial/
+├── main.go              # Entry point
+├── utils/
+│   └── helper.go        # Utility functions
+├── .air.toml           # Cấu hình Air
+├── Makefile            # Build commands
+├── go.mod              # Go modules
+└── README.md           # Documentation
+```
+
+## 🔧 Cấu hình Air
+
+File `.air.toml` chứa cấu hình cho Air:
+- **Watch**: Theo dõi các file `.go`, `.html`, `.tpl`
+- **Exclude**: Bỏ qua thư mục `tmp`, `vendor`, `testdata`
+- **Build**: Tự động build khi có thay đổi
+- **Delay**: 1 giây delay trước khi rebuild
+
+## 🎯 Demo
+
+1. Chạy `make watch`
+2. Mở file `main.go` hoặc `utils/helper.go`
+3. Thay đổi code và save
+4. Xem Air tự động rebuild và restart ứng dụng!
+
+## 📝 Lưu ý
+
+- Air sẽ tạo thư mục `tmp/` để chứa file build
+- Logs sẽ được ghi vào `build-errors.log`
+- Sử dụng `make clean` để xóa các file build
+

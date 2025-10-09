@@ -7,17 +7,80 @@ linters:
     - unused
     - errcheck
     - vet
+    - gosimple
+    - govet
+    - ineffassign
+    - misspell
+    - gocyclo
+    - goconst
+    - gocritic
+    - godot
+    - gosec
+    - revive
+  disable:
+    - deadcode
+    - varcheck
+    - structcheck
   linters-settings:
     gofmt:
       simplify: true
     golint:
       min-confidence: 0.8
+    gocyclo:
+      min-complexity: 15
+    goconst:
+      min-len: 2
+      min-occurrences: 2
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - experimental
+        - opinionated
+        - performance
+        - style
+    godot:
+      scope: declarations
+      exclude:
+        - "^//go:generate "
+    gosec:
+      excludes:
+        - G204
+        - G304
+    revive:
+      min-confidence: 0.8
+      rules:
+        - name: exported
+        - name: package-comments
+        - name: range
+        - name: time-naming
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: time-naming
+        - name: var-naming
+        - name: var-declaration
+        - name: package-comments
+        - name: range
+        - name: time-naming
+        - name: var-naming
+        - name: var-declaration
   issues:
-      exclude-rules:
-        - path: _test\.go
-          linters:
-            - errcheck
+    exclude-rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+      - path: vendor/
+        linters:
+          - all   
+    max-issues-per-linter: 0
+    max-same-issues: 0
   run:
     deadline: 5m
     tests: true
+    skip-dirs:
+      - vendor
+    skip-files:
+      - ".*\\.pb\\.go$"
 

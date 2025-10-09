@@ -1,0 +1,38 @@
+# Gofmt configuration for go-tutorial project
+# This file defines the formatting rules for Go code
+
+# Basic formatting options
+simplify: true
+rewrite_rules:
+  # Simplify code where possible
+  - pattern: "if x != nil { return x }"
+    replacement: "return x"
+  
+  # Remove unnecessary parentheses
+  - pattern: "(x)"
+    replacement: "x"
+
+# Line length settings
+max_line_length: 120
+
+# Indentation settings
+use_tabs: true
+tab_width: 4
+
+# Import organization
+imports:
+  # Group imports: standard library, third-party, local
+  group_imports: true
+  # Sort imports alphabetically within each group
+  sort_imports: true
+  # Remove unused imports
+  remove_unused: true
+
+# Code style preferences
+style:
+  # Use short variable declarations where possible
+  prefer_short_declarations: true
+  # Use range loops where appropriate
+  prefer_range_loops: true
+  # Simplify boolean expressions
+  simplify_booleans: true
