@@ -86,20 +86,20 @@ import (
 func main() {
     // Load configuration
     cfg := config.Load()
-    
+  
     // Initialize logger
     logger := logger.New(cfg.LogLevel)
-    
+  
     // Initialize database
     db := persistence.NewDatabase(cfg.Database)
     defer db.Close()
-    
+  
     // Initialize event bus
     eventBus := messaging.NewEventBus(cfg.Messaging)
-    
+  
     // Initialize HTTP server
     server := http.NewServer(cfg.Server, db, eventBus, logger)
-    
+  
     // Start server
     if err := server.Start(context.Background()); err != nil {
         log.Fatal("Failed to start server:", err)
@@ -141,7 +141,7 @@ func NewUser(id valueobjects.UserID, email valueobjects.Email, name string) *Use
         updatedAt: time.Now(),
         events:    make([]events.DomainEvent, 0),
     }
-    
+  
     // Publish domain event
     user.AddEvent(events.NewUserCreatedEvent(id, email, name))
     return user
@@ -201,11 +201,11 @@ func NewUserIDFromString(id string) (UserID, error) {
     if id == "" {
         return UserID{}, errors.New("user ID cannot be empty")
     }
-    
+  
     if _, err := uuid.Parse(id); err != nil {
         return UserID{}, errors.New("invalid user ID format")
     }
-    
+  
     return UserID{value: id}, nil
 }
 
@@ -233,12 +233,12 @@ func NewEmail(email string) (Email, error) {
     if email == "" {
         return Email{}, errors.New("email cannot be empty")
     }
-    
+  
     emailRegex := regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
     if !emailRegex.MatchString(email) {
         return Email{}, errors.New("invalid email format")
     }
-    
+  
     return Email{value: email}, nil
 }
 
@@ -398,28 +398,28 @@ func (h *CreateUserHandler) Handle(ctx context.Context, cmd CreateUserCommand) e
     if err != nil {
         return err
     }
-    
+  
     // Check if user already exists
     existingUser, err := h.userRepo.FindByEmail(ctx, email)
     if err == nil && existingUser != nil {
         return errors.New("user with this email already exists")
     }
-    
+  
     // Create new user
     userID := valueobjects.NewUserID()
     user := entities.NewUser(userID, email, cmd.Name)
-    
+  
     // Save user
     if err := h.userRepo.Save(ctx, user); err != nil {
         return err
     }
-    
+  
     // Publish domain events
     for _, event := range user.GetEvents() {
         h.eventBus.Publish(ctx, event)
     }
     user.ClearEvents()
-    
+  
     return nil
 }
 ```
@@ -462,12 +462,12 @@ func (h *GetUserHandler) Handle(ctx context.Context, query GetUserQuery) (*UserD
     if err != nil {
         return nil, err
     }
-    
+  
     user, err := h.userRepo.FindByID(ctx, userID)
     if err != nil {
         return nil, err
     }
-    
+  
     return &UserDTO{
         ID:        user.GetID().String(),
         Email:     user.GetEmail().String(),
@@ -508,13 +508,13 @@ func (h *UserCreatedHandler) Handle(ctx context.Context, event events.DomainEven
     if !ok {
         return errors.New("invalid event type")
     }
-    
+  
     // Send welcome email
     if err := h.emailService.SendWelcomeEmail(ctx, userCreatedEvent.Email.String(), userCreatedEvent.Name); err != nil {
         h.logger.Error("Failed to send welcome email", err)
         return err
     }
-    
+  
     h.logger.Info("Welcome email sent to user", "user_id", userCreatedEvent.UserID.String())
     return nil
 }
@@ -555,7 +555,7 @@ func (r *userRepository) Save(ctx context.Context, user *entities.User) error {
             name = $3,
             updated_at = $5
     `
-    
+  
     _, err := r.db.ExecContext(ctx, query,
         user.GetID().String(),
         user.GetEmail().String(),
@@ -563,73 +563,73 @@ func (r *userRepository) Save(ctx context.Context, user *entities.User) error {
         user.GetCreatedAt(),
         user.GetUpdatedAt(),
     )
-    
+  
     return err
 }
 
 func (r *userRepository) FindByID(ctx context.Context, id valueobjects.UserID) (*entities.User, error) {
     query := `SELECT id, email, name, created_at, updated_at FROM users WHERE id = $1`
-    
+  
     var user entities.User
     var idStr, emailStr string
-    
+  
     err := r.db.QueryRowContext(ctx, query, id.String()).Scan(
         &idStr, &emailStr, &user.Name, &user.CreatedAt, &user.UpdatedAt,
     )
-    
+  
     if err != nil {
         if err == sql.ErrNoRows {
             return nil, nil
         }
         return nil, err
     }
-    
+  
     userID, err := valueobjects.NewUserIDFromString(idStr)
     if err != nil {
         return nil, err
     }
-    
+  
     email, err := valueobjects.NewEmail(emailStr)
     if err != nil {
         return nil, err
     }
-    
+  
     user.ID = userID
     user.Email = email
-    
+  
     return &user, nil
 }
 
 func (r *userRepository) FindByEmail(ctx context.Context, email valueobjects.Email) (*entities.User, error) {
     query := `SELECT id, email, name, created_at, updated_at FROM users WHERE email = $1`
-    
+  
     var user entities.User
     var idStr, emailStr string
-    
+  
     err := r.db.QueryRowContext(ctx, query, email.String()).Scan(
         &idStr, &emailStr, &user.Name, &user.CreatedAt, &user.UpdatedAt,
     )
-    
+  
     if err != nil {
         if err == sql.ErrNoRows {
             return nil, nil
         }
         return nil, err
     }
-    
+  
     userID, err := valueobjects.NewUserIDFromString(idStr)
     if err != nil {
         return nil, err
     }
-    
+  
     userEmail, err := valueobjects.NewEmail(emailStr)
     if err != nil {
         return nil, err
     }
-    
+  
     user.ID = userID
     user.Email = userEmail
-    
+  
     return &user, nil
 }
 
@@ -666,7 +666,7 @@ func NewEventBus() events.EventBus {
 func (b *eventBus) Subscribe(eventType string, handler events.EventHandler) {
     b.mutex.Lock()
     defer b.mutex.Unlock()
-    
+  
     b.handlers[eventType] = append(b.handlers[eventType], handler)
 }
 
@@ -674,7 +674,7 @@ func (b *eventBus) Publish(ctx context.Context, event events.DomainEvent) error 
     b.mutex.RLock()
     handlers := b.handlers[event.GetType()]
     b.mutex.RUnlock()
-    
+  
     for _, handler := range handlers {
         if err := handler.Handle(ctx, event); err != nil {
             // Log error but continue processing other handlers
@@ -682,7 +682,7 @@ func (b *eventBus) Publish(ctx context.Context, event events.DomainEvent) error 
             continue
         }
     }
-    
+  
     return nil
 }
 ```
@@ -726,23 +726,23 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
         Email string `json:"email"`
         Name  string `json:"name"`
     }
-    
+  
     if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
         http.Error(w, "Invalid request body", http.StatusBadRequest)
         return
     }
-    
+  
     cmd := commands.CreateUserCommand{
         Email: req.Email,
         Name:  req.Name,
     }
-    
+  
     if err := h.createUserHandler.Handle(r.Context(), cmd); err != nil {
         h.logger.Error("Failed to create user", err)
         http.Error(w, "Failed to create user", http.StatusInternalServerError)
         return
     }
-    
+  
     w.WriteHeader(http.StatusCreated)
     json.NewEncoder(w).Encode(map[string]string{"status": "created"})
 }
@@ -753,16 +753,16 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "User ID is required", http.StatusBadRequest)
         return
     }
-    
+  
     query := queries.GetUserQuery{ID: userID}
-    
+  
     user, err := h.getUserHandler.Handle(r.Context(), query)
     if err != nil {
         h.logger.Error("Failed to get user", err)
         http.Error(w, "User not found", http.StatusNotFound)
         return
     }
-    
+  
     json.NewEncoder(w).Encode(user)
 }
 ```
@@ -908,5 +908,39 @@ Cấu trúc package này cung cấp:
 - **Scalability**: Dễ mở rộng và maintain
 
 Event bus giúp tạo ra một hệ thống linh hoạt, có thể mở rộng và dễ bảo trì, phù hợp cho các ứng dụng enterprise phức tạp.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 

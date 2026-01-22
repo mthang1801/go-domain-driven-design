@@ -85,7 +85,12 @@ show_menu() {
 
 # Handle user input
 handle_input() {
-    read "choice?Nhập lựa chọn (1-7): "
+    printf "Nhập lựa chọn (1-7): "
+    if ! read -r choice; then
+        echo ""
+        echo "👋 Tạm biệt!"
+        exit 0
+    fi
     
     case $choice in
         1)
@@ -149,6 +154,11 @@ else
         show_menu
         handle_input
         echo ""
-        read "continue?Nhấn Enter để tiếp tục..."
+        printf "Nhấn Enter để tiếp tục..."
+        if ! read -r _; then
+            echo ""
+            echo "👋 Tạm biệt!"
+            exit 0
+        fi
     done
 fi
