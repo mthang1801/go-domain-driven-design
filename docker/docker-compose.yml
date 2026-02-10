@@ -1,0 +1,7 @@
+version: "3.9"
+services:
+  asynq:  
+    image: hibiken/asynqmon
+    container_name: "asynq"
+    ports:
+      - "8082:8080"

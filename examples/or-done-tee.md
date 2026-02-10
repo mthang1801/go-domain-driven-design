@@ -1,4 +1,4 @@
-package main
+```package main
 
 import (
 	"context"
@@ -194,3 +194,4 @@ func main() {
 
 	fmt.Println("Done:", ctx.Err())
 }
+```
