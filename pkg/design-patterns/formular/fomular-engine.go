@@ -784,15 +784,15 @@ func (v *SQLCompilerVisitor) getSQLOperator(op BinaryOperation) string {
 type TokenType int
 
 const (
-	TokenNumber TokenType = iota  // 0
-	TokenString                    // 1
-	TokenVariable                  // 2
-	TokenOperator                  // 3
-	TokenFunction                  // 4
-	TokenLeftParen                 // 5
-	TokenRightParen                // 6
-	TokenComma                     // 7
-	TokenEOF                       // 8
+	TokenNumber     TokenType = iota // 0
+	TokenString                      // 1
+	TokenVariable                    // 2
+	TokenOperator                    // 3
+	TokenFunction                    // 4
+	TokenLeftParen                   // 5
+	TokenRightParen                  // 6
+	TokenComma                       // 7
+	TokenEOF                         // 8
 )
 
 type Token struct {
@@ -929,18 +929,18 @@ func (t *Tokenizer) readIdentifier() {
 	// Check if followed by '(' WITHOUT consuming whitespace first
 	// This ensures we differentiate between "AND(" and "AND ("
 	hasImmediateParenthesis := t.position < len(t.input) && t.input[t.position] == '('
-	
+
 	// Look ahead with whitespace skipping
 	savedPos := t.position
 	t.skipWhitespace()
 	hasParenthesisAfterSpace := t.position < len(t.input) && t.input[t.position] == '('
-	
+
 	// Restore position for now
 	t.position = savedPos
-	
+
 	// Special rules for AND, OR, IN:
 	// - AND( or OR( (no space) → Function (Excel style)
-	// - AND ( or OR ( (with space) → Operator (SQL style)  
+	// - AND ( or OR ( (with space) → Operator (SQL style)
 	// - IN always operator (even IN() would be weird)
 	if hasImmediateParenthesis && (upperValue == "AND" || upperValue == "OR" || upperValue == "NOT") {
 		// No space before '(' → Function call like AND(...), OR(...), NOT(...)
@@ -951,7 +951,7 @@ func (t *Tokenizer) readIdentifier() {
 		})
 		return
 	}
-	
+
 	// IN, BETWEEN, IS are ALWAYS operators
 	if upperValue == "IN" || upperValue == "BETWEEN" || upperValue == "IS" {
 		t.tokens = append(t.tokens, Token{
@@ -960,7 +960,7 @@ func (t *Tokenizer) readIdentifier() {
 		})
 		return
 	}
-	
+
 	// AND, OR, NOT with space before '(' or no '(' → Operator
 	if upperValue == "AND" || upperValue == "OR" || upperValue == "NOT" {
 		t.tokens = append(t.tokens, Token{
@@ -969,7 +969,7 @@ func (t *Tokenizer) readIdentifier() {
 		})
 		return
 	}
-	
+
 	// For other identifiers, check if it's a function
 	if hasParenthesisAfterSpace {
 		t.skipWhitespace() // consume whitespace
@@ -979,7 +979,7 @@ func (t *Tokenizer) readIdentifier() {
 		})
 		return
 	}
-	
+
 	// Everything else is a variable/identifier
 	t.tokens = append(t.tokens, Token{
 		Type:  TokenVariable,
@@ -1087,14 +1087,14 @@ func (p *Parser) parseComparison() Expression {
 	// Loop to handle multiple comparison operators
 	for p.position < len(p.tokens) {
 		token := p.tokens[p.position]
-		
+
 		// Check if it's an operator token
 		if token.Type != TokenOperator {
 			break
 		}
-		
+
 		op := token.Value
-		
+
 		// Check if it's a comparison operator we handle
 		switch op {
 		case "=", "!=", "<>", ">", ">=", "<", "<=":
@@ -1164,7 +1164,7 @@ func (p *Parser) parseInOperand() Expression {
 	// If it's a parenthesized list
 	if p.tokens[p.position].Type == TokenLeftParen {
 		p.position++
-		
+
 		// Check if it's a single variable inside parens: IN ($2)
 		if p.position < len(p.tokens) && p.tokens[p.position].Type == TokenVariable {
 			varToken := p.tokens[p.position]
@@ -1179,17 +1179,17 @@ func (p *Parser) parseInOperand() Expression {
 
 		// Parse as array literal: (1, 2, 3, 4)
 		values := []interface{}{}
-		
+
 		for {
 			if p.position >= len(p.tokens) {
 				panic("Unexpected end in IN list")
 			}
-			
+
 			if p.tokens[p.position].Type == TokenRightParen {
 				p.position++
 				break
 			}
-			
+
 			if p.tokens[p.position].Type == TokenNumber {
 				num, _ := strconv.ParseFloat(p.tokens[p.position].Value, 64)
 				values = append(values, num)
@@ -1200,12 +1200,12 @@ func (p *Parser) parseInOperand() Expression {
 			} else {
 				panic(fmt.Sprintf("Expected number or string in IN list, got %v", p.tokens[p.position]))
 			}
-			
+
 			if p.position < len(p.tokens) && p.tokens[p.position].Type == TokenComma {
 				p.position++
 			}
 		}
-		
+
 		return NewConstant(values)
 	}
 
@@ -1363,7 +1363,8 @@ func (p *Parser) parseFunction() Expression {
 // ============================================================================
 
 func main() {
-	fmt.Println("=== Expression Engine - Fixed Parser Tests ===\n")
+	fmt.Println("=== Expression Engine - Fixed Parser Tests ===")
+	fmt.Println()
 
 	testExcelFormula()
 	testNestedFunctions()

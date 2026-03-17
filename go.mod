@@ -1,6 +1,6 @@
 module go-domain-driven-design
 
-go 1.25
+go 1.26
 
 require (
 	github.com/Jeffail/tunny v0.1.4

@@ -14,12 +14,12 @@
 
 ### Go vs NestJS
 
-| Khái niệm    | Go                             | NestJS                        |
-| -------------- | ------------------------------ | ----------------------------- |
-| Module         | Package                        | Module                        |
+| Khái niệm      | Go                       | NestJS                      |
+| -------------- | ------------------------ | --------------------------- |
+| Module         | Package                  | Module                      |
 | Export         | Tên bắt đầu bằng chữ hoa | `export` keyword            |
-| Import         | `import "path"`              | `import { ... } from '...'` |
-| Default Export | Không có                     | `export default`            |
+| Import         | `import "path"`          | `import { ... } from '...'` |
+| Default Export | Không có                 | `export default`            |
 
 ## Package và Module
 
@@ -46,7 +46,7 @@ func internalHelper() {
 // go.mod
 module go-domain-driven-design
 
-go 1.25
+go 1.26
 
 require (
     // Dependencies
@@ -297,24 +297,24 @@ func main() {
     // Dependency Injection (tương tự NestJS DI)
     userService := services.NewUserService()
     userController := controllers.NewUserController(userService)
-  
+
     // Demo các utility functions
     utils.PrintWithTimestamp("Starting application...")
-  
+
     // Demo user operations
     err := userController.CreateUser("John Doe", "john@example.com")
     if err != nil {
         fmt.Printf("Error: %v\n", err)
         return
     }
-  
+
     users := userController.GetAllUsers()
     fmt.Printf("Total users: %d\n", len(users))
-  
+
     for _, user := range users {
         fmt.Printf("User: %s (%s)\n", user.Name, user.Email)
     }
-  
+
     utils.PrintWithTimestamp("Application completed!")
 }
 ```
@@ -327,31 +327,31 @@ func main() {
 // user.service.ts
 @Injectable()
 export class UserService {
-  private users: User[] = [];
-  
-  createUser(user: User): void {
-    this.users.push(user);
-  }
-  
-  getUsers(): User[] {
-    return this.users;
-  }
+    private users: User[] = [];
+
+    createUser(user: User): void {
+        this.users.push(user);
+    }
+
+    getUsers(): User[] {
+        return this.users;
+    }
 }
 
 // user.controller.ts
 @Controller('users')
 export class UserController {
-  constructor(private userService: UserService) {}
-  
-  @Post()
-  createUser(@Body() userData: CreateUserDto): void {
-    this.userService.createUser(userData);
-  }
-  
-  @Get()
-  getUsers(): User[] {
-    return this.userService.getUsers();
-  }
+    constructor(private userService: UserService) {}
+
+    @Post()
+    createUser(@Body() userData: CreateUserDto): void {
+        this.userService.createUser(userData);
+    }
+
+    @Get()
+    getUsers(): User[] {
+        return this.userService.getUsers();
+    }
 }
 ```
 
@@ -398,7 +398,7 @@ func (c *UserController) GetUsers() []User {
 ### 1. Package Organization
 
 ```
-	
+
 ```
 
 ### 2. Naming Conventions
