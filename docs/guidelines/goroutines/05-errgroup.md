@@ -330,6 +330,191 @@ func main() {
 
 ---
 
+### Example 4: HTTP API Fanout + GORM — Aggregate Data từ Multiple Services
+
+**Mục tiêu**: Gọi song song 3 external APIs để lấy data, aggregate kết quả, và lưu vào DB bằng GORM. Pattern phổ biến trong API gateway, dashboard aggregation, BFF (Backend-for-Frontend).
+
+**Cần gì**: `errgroup`, `net/http`, `gorm.io/gorm`.
+
+**Có gì**: 3 services (User, Order, Payment) → aggregate → save DashboardSnapshot.
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+    "net/http"
+    "time"
+
+    "golang.org/x/sync/errgroup"
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Models: API responses + GORM destination
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type UserStats struct {
+    TotalUsers  int `json:"total_users"`
+    ActiveUsers int `json:"active_users"`
+}
+
+type OrderStats struct {
+    TotalOrders   int     `json:"total_orders"`
+    TotalRevenue  float64 `json:"total_revenue"`
+}
+
+type PaymentStats struct {
+    PendingCount  int     `json:"pending_count"`
+    FailedCount   int     `json:"failed_count"`
+    SuccessRate   float64 `json:"success_rate"`
+}
+
+// DashboardSnapshot: aggregated result → lưu vào DB
+type DashboardSnapshot struct {
+    ID            uint      `gorm:"primarykey;autoIncrement"`
+    TotalUsers    int       `gorm:"column:total_users"`
+    ActiveUsers   int       `gorm:"column:active_users"`
+    TotalOrders   int       `gorm:"column:total_orders"`
+    TotalRevenue  float64   `gorm:"column:total_revenue"`
+    PaymentSucc   float64   `gorm:"column:payment_success_rate"`
+    PendingPay    int       `gorm:"column:pending_payments"`
+    SnapshotAt    time.Time `gorm:"column:snapshot_at;index"`
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// fetchJSON: generic HTTP GET + JSON decode
+// Reusable cho mọi API call — DRY principle
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+func fetchJSON[T any](ctx context.Context, client *http.Client, url string) (T, error) {
+    var result T
+    req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+    if err != nil {
+        return result, fmt.Errorf("create request: %w", err)
+    }
+
+    resp, err := client.Do(req)
+    if err != nil {
+        return result, fmt.Errorf("fetch %s: %w", url, err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode != http.StatusOK {
+        return result, fmt.Errorf("API %s returned %d", url, resp.StatusCode)
+    }
+
+    if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+        return result, fmt.Errorf("decode %s: %w", url, err)
+    }
+    return result, nil
+}
+
+func aggregateDashboard(ctx context.Context, db *gorm.DB) error {
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // errgroup.WithContext: cancel tất cả nếu 1 API fail
+    // SetLimit(3): chỉ 3 goroutines (1 per API call)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    eg, egCtx := errgroup.WithContext(ctx)
+    eg.SetLimit(3)
+
+    client := &http.Client{Timeout: 5 * time.Second}
+
+    // Results — mỗi goroutine ghi vào biến riêng → NO RACE
+    var users UserStats
+    var orders OrderStats
+    var payments PaymentStats
+
+    // ━━━ Goroutine 1: Fetch User Stats ━━━
+    eg.Go(func() error {
+        var err error
+        users, err = fetchJSON[UserStats](egCtx, client, "http://user-service:8080/api/stats")
+        if err != nil {
+            return fmt.Errorf("user service: %w", err)
+        }
+        log.Printf("[Users] Total=%d, Active=%d", users.TotalUsers, users.ActiveUsers)
+        return nil
+    })
+
+    // ━━━ Goroutine 2: Fetch Order Stats ━━━
+    eg.Go(func() error {
+        var err error
+        orders, err = fetchJSON[OrderStats](egCtx, client, "http://order-service:8080/api/stats")
+        if err != nil {
+            return fmt.Errorf("order service: %w", err)
+        }
+        log.Printf("[Orders] Total=%d, Revenue=$%.2f", orders.TotalOrders, orders.TotalRevenue)
+        return nil
+    })
+
+    // ━━━ Goroutine 3: Fetch Payment Stats ━━━
+    eg.Go(func() error {
+        var err error
+        payments, err = fetchJSON[PaymentStats](egCtx, client, "http://payment-service:8080/api/stats")
+        if err != nil {
+            return fmt.Errorf("payment service: %w", err)
+        }
+        log.Printf("[Payments] Success=%.1f%%, Pending=%d", payments.SuccessRate*100, payments.PendingCount)
+        return nil
+    })
+
+    // ━━━ Wait: tất cả 3 goroutines xong (hoặc 1 fail → cancel rest) ━━━
+    if err := eg.Wait(); err != nil {
+        return fmt.Errorf("aggregate failed: %w", err)
+    }
+
+    // ━━━ Save aggregated result vào DB ━━━
+    snapshot := DashboardSnapshot{
+        TotalUsers:   users.TotalUsers,
+        ActiveUsers:  users.ActiveUsers,
+        TotalOrders:  orders.TotalOrders,
+        TotalRevenue: orders.TotalRevenue,
+        PaymentSucc:  payments.SuccessRate,
+        PendingPay:   payments.PendingCount,
+        SnapshotAt:   time.Now(),
+    }
+
+    if err := db.WithContext(ctx).Create(&snapshot).Error; err != nil {
+        return fmt.Errorf("save snapshot: %w", err)
+    }
+
+    log.Printf("✅ Dashboard snapshot saved (ID: %d)", snapshot.ID)
+    return nil
+}
+
+func main() {
+    dsn := "host=localhost user=app dbname=dashboard port=5432 sslmode=disable"
+    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+    if err != nil {
+        log.Fatal(err)
+    }
+    db.AutoMigrate(&DashboardSnapshot{})
+
+    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+    defer cancel()
+
+    if err := aggregateDashboard(ctx, db); err != nil {
+        log.Fatal("❌", err)
+    }
+}
+```
+
+**Kết quả đạt được**:
+- 3 API calls chạy **song song** (thay vì sequential) → latency = max(3 calls) thay vì sum.
+- **Error propagation**: 1 service fail → cancel 2 services còn lại ngay lập tức.
+- **Context truyền end-to-end**: HTTP request → errgroup → API calls → GORM → DB.
+- **No race condition**: mỗi goroutine ghi vào biến riêng (`users`, `orders`, `payments`).
+
+**Lưu ý**:
+- **SetLimit(3)**: trong trường hợp này = 3 (1 per API). Nếu fan-out 100 APIs → SetLimit(10) để tránh overload.
+- **http.Client shared**: Go `http.Client` thread-safe — share giữa goroutines.
+- **Retry**: errgroup cancel khi 1 fail. Nếu cần retry individual → wrap mỗi call với `avast/retry-go`.
+- Pattern mở rộng: thêm `sync.Pool` cho JSON decoder buffers nếu call volume lớn.
+
+---
+
 ## ④ PITFALLS
 
 | # | Lỗi | Fix |
@@ -349,3 +534,16 @@ func main() {
 | errgroup package | https://pkg.go.dev/golang.org/x/sync/errgroup |
 | Go Blog — Pipelines | https://go.dev/blog/pipelines |
 | errgroup source code | https://cs.opensource.google/go/x/sync/+/master:errgroup/ |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Type-safe alternative** | `sourcegraph/conc` ErrorPool | Collect ALL errors + panic recovery — xem [13-conc.md](./13-conc.md) |
+| **Limit concurrency** | `errgroup.SetLimit(n)` | Thay thế semaphore cho simple cases |
+| **Advanced limiting** | `x/sync/semaphore` | Weighted semaphore cho mixed workloads — xem [10-semaphore.md](./10-semaphore.md) |
+| **GORM batch** | errgroup + `db.CreateInBatches` | Parallel batch insert — xem [go-orm/02-crud.md](../go-orm/02-crud.md) |
+| **HTTP fanout** | errgroup + `http.Client` | Parallel API calls với shared error handling |
+| **Distributed** | Asynq task groups | Cross-process error propagation — xem [15-asynq.md](./15-asynq.md) |

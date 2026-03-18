@@ -295,3 +295,17 @@ func main() {
 | Go Blog — Context | https://go.dev/blog/context |
 | context package | https://pkg.go.dev/context |
 | Go Concurrency Patterns: Context | https://go.dev/talks/2014/gotham-context.slide |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **GORM + Context** | `db.WithContext(ctx)` | Mọi DB query nên truyền context — auto cancel khi timeout — xem [go-orm/06](../go-orm/06-migration-and-advanced.md) |
+| **HTTP Middleware** | `r.Context()` | Request context tự cancel khi client disconnect |
+| **gRPC Context** | `metadata.FromIncomingContext(ctx)` | gRPC truyền context + metadata qua network |
+| **OpenTelemetry** | `otel.Tracer` + context | Trace propagation qua context — distributed tracing |
+| **errgroup + Context** | `errgroup.WithContext(ctx)` | Cancel nhóm goroutines khi 1 goroutine fail — xem [05-errgroup.md](./05-errgroup.md) |
+| **Redis + Context** | `rdb.Get(ctx, key)` | go-redis v9 hỗ trợ context cho mọi operation |
+| **Gin/Echo middleware** | `c.Request.Context()` | Web framework context integration |

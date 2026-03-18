@@ -314,6 +314,225 @@ func main() {
 
 ---
 
+### Example 3: Asynq + GORM + Email — Order Processing Pipeline
+
+**Mục tiêu**: Full production pipeline: GORM hook → enqueue Asynq task → worker fetch DB → process → send email → update status. Pattern phổ biến cho e-commerce: order created → background processing → confirmation email.
+
+**Cần gì**: `asynq`, `gorm.io/gorm`, Go standard library.
+
+**Có gì**: Order model với GORM hook `AfterCreate` tự enqueue Asynq task. Worker: fetch order từ DB → validate → send email → update status. Idempotent handler.
+
+```go
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// models/order.go — GORM model + Asynq integration
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+package models
+
+import (
+    "encoding/json"
+    "log"
+    "time"
+
+    "github.com/hibiken/asynq"
+    "gorm.io/gorm"
+)
+
+type Order struct {
+    ID        uint           `gorm:"primarykey" json:"id"`
+    UserEmail string         `gorm:"column:user_email;not null" json:"user_email"`
+    Product   string         `gorm:"column:product;not null" json:"product"`
+    Amount    float64        `gorm:"column:amount;not null" json:"amount"`
+    Status    string         `gorm:"column:status;default:'pending';index" json:"status"`
+    // "pending" → "processing" → "confirmed" → "email_sent"
+    ProcessedAt *time.Time   `gorm:"column:processed_at" json:"processed_at"`
+    CreatedAt   time.Time    `json:"created_at"`
+    UpdatedAt   time.Time    `json:"updated_at"`
+}
+
+const TypeOrderProcess = "order:process"
+
+type OrderProcessPayload struct {
+    OrderID uint `json:"order_id"`
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GORM Hook: AfterCreate → auto enqueue Asynq task
+// Mọi order mới tạo → tự động queue background processing
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+var AsynqClient *asynq.Client // set in main()
+
+func (o *Order) AfterCreate(tx *gorm.DB) error {
+    if AsynqClient == nil {
+        return nil
+    }
+
+    payload, _ := json.Marshal(OrderProcessPayload{OrderID: o.ID})
+    task := asynq.NewTask(
+        TypeOrderProcess,
+        payload,
+        asynq.MaxRetry(5),
+        asynq.Timeout(2*time.Minute),
+        asynq.Queue("orders"),
+    )
+
+    info, err := AsynqClient.Enqueue(task)
+    if err != nil {
+        log.Printf("⚠️ Failed to enqueue order %d: %v", o.ID, err)
+        // Không return error — order đã tạo thành công
+        // Task sẽ được enqueue lại bởi retry mechanism
+        return nil
+    }
+
+    log.Printf("📤 Order %d enqueued: task_id=%s", o.ID, info.ID)
+    return nil
+}
+```
+
+```go
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// handlers/order_handler.go — Worker handler
+// ⚠ IDEMPOTENT: có thể gọi nhiều lần cho cùng order
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+package handlers
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+    "time"
+
+    "github.com/hibiken/asynq"
+    "gorm.io/gorm"
+    "myapp/models"
+)
+
+type OrderHandler struct {
+    DB *gorm.DB
+}
+
+func (h *OrderHandler) HandleOrderProcess(ctx context.Context, t *asynq.Task) error {
+    var payload models.OrderProcessPayload
+    if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+        // ━━━ Non-retryable error: payload corrupt ━━━
+        return fmt.Errorf("unmarshal: %w", asynq.SkipRetry)
+    }
+
+    // ━━━ Step 1: Fetch order từ DB ━━━
+    var order models.Order
+    if err := h.DB.WithContext(ctx).First(&order, payload.OrderID).Error; err != nil {
+        return fmt.Errorf("fetch order %d: %w", payload.OrderID, err)
+    }
+
+    // ━━━ Step 2: Idempotency check — skip nếu đã processed ━━━
+    // At-least-once delivery → handler có thể gọi > 1 lần
+    if order.Status == "confirmed" || order.Status == "email_sent" {
+        log.Printf("⏭️ Order %d already %s — skipping", order.ID, order.Status)
+        return nil // ← idempotent: không xử lý lại
+    }
+
+    // ━━━ Step 3: Process order ━━━
+    log.Printf("⚙️ Processing order %d: %s ($%.2f)", order.ID, order.Product, order.Amount)
+
+    // Update status: pending → processing
+    h.DB.WithContext(ctx).Model(&order).Update("status", "processing")
+
+    // Simulate processing (inventory check, payment validation, etc.)
+    time.Sleep(500 * time.Millisecond)
+
+    // Update status: processing → confirmed
+    now := time.Now()
+    h.DB.WithContext(ctx).Model(&order).Updates(map[string]interface{}{
+        "status":       "confirmed",
+        "processed_at": &now,
+    })
+
+    // ━━━ Step 4: Send confirmation email ━━━
+    if err := sendEmail(order.UserEmail, order); err != nil {
+        // Email fail → retry (order đã confirmed, email chưa gửi)
+        return fmt.Errorf("email order %d: %w", order.ID, err)
+    }
+
+    // Update final status
+    h.DB.WithContext(ctx).Model(&order).Update("status", "email_sent")
+
+    log.Printf("✅ Order %d completed: confirmed + email sent to %s", order.ID, order.UserEmail)
+    return nil
+}
+
+func sendEmail(to string, order models.Order) error {
+    // Production: dùng SMTP, SendGrid, SES
+    log.Printf("📧 Sending confirmation to %s: Order #%d - %s ($%.2f)",
+        to, order.ID, order.Product, order.Amount)
+    time.Sleep(200 * time.Millisecond) // simulate
+    return nil
+}
+```
+
+```go
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// cmd/worker/main.go — Worker server
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+package main
+
+import (
+    "log"
+
+    "github.com/hibiken/asynq"
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+    "myapp/handlers"
+    "myapp/models"
+)
+
+func main() {
+    // Setup GORM
+    dsn := "host=localhost user=app dbname=shop port=5432 sslmode=disable"
+    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+    if err != nil {
+        log.Fatal(err)
+    }
+    db.AutoMigrate(&models.Order{})
+
+    // Setup Asynq worker
+    srv := asynq.NewServer(
+        asynq.RedisClientOpt{Addr: "localhost:6379"},
+        asynq.Config{
+            Concurrency: 10,
+            Queues: map[string]int{
+                "orders":   6,
+                "emails":   3,
+                "default":  1,
+            },
+        },
+    )
+
+    orderHandler := &handlers.OrderHandler{DB: db}
+
+    mux := asynq.NewServeMux()
+    mux.HandleFunc(models.TypeOrderProcess, orderHandler.HandleOrderProcess)
+
+    if err := srv.Run(mux); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+**Kết quả đạt được**:
+- **Full pipeline**: GORM `AfterCreate` hook → Asynq queue → Worker → DB update → Email.
+- **Idempotent handler**: check status trước khi process → retry safe.
+- **Error handling**: payload corrupt → `SkipRetry` (không retry). Email fail → retry (order đã confirmed).
+- **Status tracking**: `pending → processing → confirmed → email_sent` — observable workflow.
+
+**Lưu ý**:
+- **Hook không return error**: `AfterCreate` enqueue fail → log nhưng không rollback order. Order creation là critical, enqueue có thể retry.
+- **Status-based idempotency**: kiểm tra `order.Status` trước khi process — tránh duplicate processing.
+- **`SkipRetry` wrapper**: `asynq.SkipRetry` — non-retryable error (corrupt payload, invalid data).
+- **Separation**: API server (enqueue) ≠ Worker server (process) — scale independently.
+- Production: thêm **Asynqmon** dashboard để monitor task states.
+
+---
+
 ## ④ PITFALLS
 
 | # | Lỗi | Fix |
@@ -334,3 +553,16 @@ func main() {
 | Asynq Wiki | https://github.com/hibiken/asynq/wiki |
 | Asynqmon (Web UI) | https://github.com/hibiken/asynqmon |
 | Asynq GoDoc | https://pkg.go.dev/github.com/hibiken/asynq |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **In-process alternative** | Ants / Tunny | Không cần Redis — xem [12-ants.md](./12-ants.md) |
+| **Heavy workloads** | Machinery | Hỗ trợ result backends, workflows — `github.com/RichardKnop/machinery` |
+| **Monitoring** | Asynqmon Web UI | Dashboard cho task monitoring — `github.com/hibiken/asynqmon` |
+| **GORM + Asynq** | Background GORM operations | Async DB writes, batch processing — xem [go-orm/05](../go-orm/05-transactions-and-hooks.md) |
+| **Email/Notification** | Asynq + SMTP/FCM | Async email sending, push notifications |
+| **Kubernetes** | Asynq workers as Deployment | Scale workers independently từ API server |

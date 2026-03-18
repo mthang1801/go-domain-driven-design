@@ -323,3 +323,16 @@ func main() {
 | Conc GitHub | https://github.com/sourcegraph/conc |
 | Conc GoDoc | https://pkg.go.dev/github.com/sourcegraph/conc |
 | Conc Blog Post | https://about.sourcegraph.com/blog/building-conc-better-structured-concurrency-for-go |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **High-perf** | Ants | Goroutine reuse, auto-scale — xem [12-ants.md](./12-ants.md) |
+| **Distributed** | Asynq | Cross-process tasks — xem [15-asynq.md](./15-asynq.md) |
+| **GORM + Map** | `iter.Map` + GORM queries | Parallel DB reads type-safe — xem [go-orm/03](../go-orm/03-querying.md) |
+| **HTTP fanout** | `conc.ErrorPool` + http.Client | Parallel API calls + collect all errors |
+| **Stream processing** | `conc.Pool` + channels + pipeline | Structured concurrency cho pipeline stages |
+| **Testing** | `conc` panics re-raised | Dễ test hơn errgroup — panics không bị swallow |

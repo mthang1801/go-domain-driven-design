@@ -287,6 +287,173 @@ func demonstrateJoinsAndAssocMode(db *gorm.DB) {
 
 ---
 
+### Example 4: errgroup + Selective Preload + Gin — Concurrent Dashboard API
+
+**Mục tiêu**: API `/dashboard/:user_id` cần load đồng thời: user info, recent orders, profile, roles, notifications. Dùng errgroup fan-out queries → merge kết quả → single JSON response. Giảm response time từ ~400ms (sequential) → ~100ms (parallel).
+
+**Cần gì**: `gorm.io/gorm`, `golang.org/x/sync/errgroup`, `github.com/gin-gonic/gin`.
+
+**Có gì**: Gin handler fan-out 4 GORM queries parallel, mỗi query preload khác nhau, merge vào DashboardResponse.
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+    "net/http"
+    "strconv"
+    "time"
+
+    "github.com/gin-gonic/gin"
+    "golang.org/x/sync/errgroup"
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Models
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type User struct {
+    gorm.Model
+    Name  string `gorm:"size:100" json:"name"`
+    Email string `gorm:"uniqueIndex" json:"email"`
+}
+
+type Profile struct {
+    gorm.Model
+    UserID uint   `gorm:"uniqueIndex" json:"-"`
+    Bio    string `gorm:"type:text" json:"bio"`
+    Avatar string `gorm:"size:500" json:"avatar"`
+}
+
+type Order struct {
+    gorm.Model
+    UserID      uint    `gorm:"index" json:"-"`
+    OrderNumber string  `gorm:"uniqueIndex" json:"order_number"`
+    TotalAmount float64 `gorm:"type:decimal(12,2)" json:"total_amount"`
+    Status      string  `gorm:"index" json:"status"`
+}
+
+type Role struct {
+    gorm.Model
+    Name string `gorm:"size:50;uniqueIndex" json:"name"`
+}
+
+type Notification struct {
+    gorm.Model
+    UserID  uint   `gorm:"index" json:"-"`
+    Message string `gorm:"size:500" json:"message"`
+    IsRead  bool   `gorm:"default:false;index" json:"is_read"`
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DashboardResponse: API response DTO
+// Tổng hợp data từ 4 queries parallel
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type DashboardResponse struct {
+    User          User           `json:"user"`
+    Profile       *Profile       `json:"profile"`
+    RecentOrders  []Order        `json:"recent_orders"`
+    Roles         []string       `json:"roles"`
+    Notifications []Notification `json:"notifications"`
+    UnreadCount   int64          `json:"unread_count"`
+}
+
+func dashboardHandler(db *gorm.DB) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        userID, err := strconv.ParseUint(c.Param("user_id"), 10, 64)
+        if err != nil {
+            c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user_id"})
+            return
+        }
+
+        ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+        defer cancel()
+
+        var resp DashboardResponse
+        eg, egCtx := errgroup.WithContext(ctx)
+
+        // ━━━ Query 1: User info (nhẹ) ━━━
+        eg.Go(func() error {
+            return db.WithContext(egCtx).First(&resp.User, userID).Error
+        })
+
+        // ━━━ Query 2: Profile (nhẹ) ━━━
+        eg.Go(func() error {
+            var profile Profile
+            err := db.WithContext(egCtx).Where("user_id = ?", userID).First(&profile).Error
+            if err == nil {
+                resp.Profile = &profile
+            }
+            return nil // profile optional — không fail request
+        })
+
+        // ━━━ Query 3: Recent Orders — top 10, mới nhất ━━━
+        eg.Go(func() error {
+            return db.WithContext(egCtx).
+                Where("user_id = ?", userID).
+                Order("created_at DESC").
+                Limit(10).
+                Find(&resp.RecentOrders).Error
+        })
+
+        // ━━━ Query 4: Notifications — unread + count ━━━
+        eg.Go(func() error {
+            // Unread notifications (top 5)
+            if err := db.WithContext(egCtx).
+                Where("user_id = ? AND is_read = ?", userID, false).
+                Order("created_at DESC").
+                Limit(5).
+                Find(&resp.Notifications).Error; err != nil {
+                return err
+            }
+
+            // Unread count (for badge)
+            return db.WithContext(egCtx).
+                Model(&Notification{}).
+                Where("user_id = ? AND is_read = ?", userID, false).
+                Count(&resp.UnreadCount).Error
+        })
+
+        // ━━━ Wait: tất cả 4 queries hoàn thành hoặc error ━━━
+        if err := eg.Wait(); err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+            return
+        }
+
+        c.JSON(http.StatusOK, resp)
+    }
+}
+
+func main() {
+    dsn := "host=localhost user=app dbname=myapp port=5432 sslmode=disable"
+    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{PrepareStmt: true})
+    if err != nil {
+        log.Fatal(err)
+    }
+    db.AutoMigrate(&User{}, &Profile{}, &Order{}, &Role{}, &Notification{})
+
+    r := gin.Default()
+    r.GET("/dashboard/:user_id", dashboardHandler(db))
+    r.Run(":8080")
+}
+```
+
+**Kết quả đạt được**:
+- **4 queries parallel** thay vì sequential: ~100ms vs ~400ms response time.
+- **Context propagation**: errgroup `egCtx` → cancel tất cả queries nếu 1 fail hoặc timeout.
+- **Selective loading**: mỗi query load đúng data cần thiết (không Preload all).
+- **Optional associations**: Profile not found → `nil` (không fail request).
+
+**Lưu ý**:
+- **errgroup vs Preload**: dùng errgroup khi queries KHÁC table/khác logic. Dùng `Preload` khi load associations cùng model.
+- **DashboardResponse**: DTO pattern — tách response format khỏi GORM models.
+- **Timeout 3s**: production nên set per-request timeout → cancel DB queries nếu quá chậm.
+- Kết hợp singleflight cho hot users (celebrities) — xem [goroutines/11](../goroutines/11-singleflight.md).
+
+---
+
 ## ④ PITFALLS
 
 | # | Lỗi | Fix |
@@ -307,3 +474,16 @@ func demonstrateJoinsAndAssocMode(db *gorm.DB) {
 | GORM — Has Many | https://gorm.io/docs/has_many.html |
 | GORM — Many2Many | https://gorm.io/docs/many_to_many.html |
 | GORM — Preloading | https://gorm.io/docs/preload.html |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Eager loading** | `Preload` + `Joins` | Tránh N+1 — xem ví dụ trong file |
+| **Concurrent preload** | `errgroup` + selective Preload | Parallel load associations — xem [goroutines/05](../goroutines/05-errgroup.md) |
+| **GraphQL** | `gqlgen` + GORM | Auto-resolve associations cho GraphQL resolvers |
+| **Soft delete cascade** | Custom hooks cho cascade soft delete | GORM không hỗ trợ cascade soft delete tự động |
+| **DTO mapping** | `jinzhu/copier` | Map GORM models → API response DTOs |
+| **Testing** | `go-sqlmock` / `testcontainers-go` | Mock DB cho unit tests, real DB cho integration |

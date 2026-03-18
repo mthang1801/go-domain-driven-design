@@ -320,3 +320,16 @@ func main() {
 | sync.Pool docs | https://pkg.go.dev/sync#Pool |
 | Go Blog — sync.Pool | https://go.dev/src/sync/pool.go |
 | Effective Go — Allocation | https://go.dev/doc/effective_go#allocation_new |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Thay thế sync.Pool** | `valyala/bytebufferpool` | Optimized byte buffer pool — dùng trong fasthttp |
+| **JSON + Pool** | `sync.Pool` + `json.NewEncoder` | Pool JSON encoders cho API handlers — giảm allocs |
+| **Protobuf + Pool** | `sync.Pool` + `proto.Marshal` | Pool protobuf buffers trong gRPC services |
+| **HTTP handler** | `sync.Pool` + `bytes.Buffer` | Pool buffers cho response writing |
+| **Profiling** | `go tool pprof -alloc_objects` | Detect objects cần pool — benchmark trước khi pool |
+| **Kết hợp Ants/Tunny** | Worker pool + sync.Pool | Workers reuse goroutines + Pool reuse buffers — xem [08](./08-worker-pool-tunny.md), [12](./12-ants.md) |

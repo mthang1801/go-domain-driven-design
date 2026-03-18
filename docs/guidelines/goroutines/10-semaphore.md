@@ -306,6 +306,170 @@ func main() {
 
 ---
 
+### Example 4: Semaphore + Gin Middleware + GORM — API Rate Limiter
+
+**Mục tiêu**: HTTP middleware dùng semaphore để giới hạn concurrent requests cho DB-heavy API routes. Routes nhẹ (health check) không bị giới hạn. Kết hợp semaphore + Gin + GORM cho real-world API server.
+
+**Cần gì**: `golang.org/x/sync/semaphore`, `github.com/gin-gonic/gin`, `gorm.io/gorm`.
+
+**Có gì**: API server với 2 routes: `/reports` (heavy — max 5 concurrent) và `/health` (lightweight — no limit). Middleware tự inject semaphore dựa trên route weight.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "net/http"
+    "time"
+
+    "github.com/gin-gonic/gin"
+    "golang.org/x/sync/semaphore"
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GORM Model
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type Report struct {
+    ID        uint      `gorm:"primarykey" json:"id"`
+    Title     string    `gorm:"column:title" json:"title"`
+    Data      string    `gorm:"column:data;type:text" json:"data"`
+    CreatedAt time.Time `json:"created_at"`
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ConcurrencyLimiter Middleware
+// Giới hạn concurrent requests bằng weighted semaphore
+//
+// Tại sao semaphore thay vì rate limiter?
+// - Rate limiter: giới hạn REQUESTS PER SECOND (throughput)
+// - Semaphore: giới hạn CONCURRENT REQUESTS (concurrency)
+// - DB-heavy routes: cần limit concurrency (tránh connection exhaustion)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+func ConcurrencyLimiter(sem *semaphore.Weighted, weight int64, timeout time.Duration) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        // Context with timeout cho acquire
+        ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+        defer cancel()
+
+        // ━━━ Try Acquire — nếu quá timeout → 503 ━━━
+        if err := sem.Acquire(ctx, weight); err != nil {
+            c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+                "error":   "server busy",
+                "message": "too many concurrent requests, please retry",
+            })
+            log.Printf("🚫 Request rejected (semaphore full): %s %s", c.Request.Method, c.Request.URL.Path)
+            return
+        }
+
+        // ━━━ Release khi response xong ━━━
+        defer sem.Release(weight)
+
+        c.Next()
+    }
+}
+
+func main() {
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Setup: GORM + Gin + Semaphore
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    dsn := "host=localhost user=app dbname=api port=5432 sslmode=disable"
+    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+    if err != nil {
+        log.Fatal(err)
+    }
+    db.AutoMigrate(&Report{})
+
+    // Semaphore: max 5 concurrent DB-heavy requests
+    // Tại sao 5? DB connection pool = 10 connections
+    // 5 report queries (mỗi cái cần ~2 connections) = 10 connections max
+    dbSem := semaphore.NewWeighted(5)
+
+    r := gin.Default()
+
+    // ━━━ Route 1: Health check — NO semaphore (luôn available) ━━━
+    r.GET("/health", func(c *gin.Context) {
+        c.JSON(http.StatusOK, gin.H{"status": "ok"})
+    })
+
+    // ━━━ Route 2: Reports — Semaphore protected (max 5 concurrent) ━━━
+    reports := r.Group("/reports")
+    reports.Use(ConcurrencyLimiter(dbSem, 1, 5*time.Second))
+    {
+        // GET /reports — list all reports (DB-heavy: full table scan)
+        reports.GET("", func(c *gin.Context) {
+            var reportList []Report
+            if err := db.WithContext(c.Request.Context()).
+                Order("created_at DESC").
+                Limit(100).
+                Find(&reportList).Error; err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+            }
+
+            c.JSON(http.StatusOK, reportList)
+        })
+
+        // POST /reports — generate report (VERY heavy: aggregation query)
+        reports.POST("", func(c *gin.Context) {
+            // Simulate heavy DB aggregation
+            var report Report
+            if err := c.ShouldBindJSON(&report); err != nil {
+                c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+                return
+            }
+
+            // Heavy query simulation
+            time.Sleep(2 * time.Second)
+
+            if err := db.WithContext(c.Request.Context()).Create(&report).Error; err != nil {
+                c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+                return
+            }
+
+            c.JSON(http.StatusCreated, report)
+        })
+    }
+
+    // ━━━ Route 3: Export — weighted=2 (cần nhiều resources hơn) ━━━
+    r.GET("/export", ConcurrencyLimiter(dbSem, 2, 10*time.Second), func(c *gin.Context) {
+        // Export chiếm 2 slots — nặng gấp đôi report thường
+        var allReports []Report
+        db.WithContext(c.Request.Context()).Find(&allReports)
+
+        // Format as CSV, PDF, etc.
+        c.JSON(http.StatusOK, gin.H{
+            "count":   len(allReports),
+            "message": "export complete",
+        })
+    })
+
+    fmt.Println("Server running on :8080")
+    fmt.Println("  GET  /health  — no limit")
+    fmt.Println("  GET  /reports — max 5 concurrent (weight=1)")
+    fmt.Println("  POST /reports — max 5 concurrent (weight=1)")
+    fmt.Println("  GET  /export  — max 5 concurrent (weight=2)")
+    r.Run(":8080")
+}
+```
+
+**Kết quả đạt được**:
+- **Per-route concurrency control**: heavy routes (reports, export) bị giới hạn, lightweight (health) không.
+- **Weighted limiting**: `/export` chiếm 2 slots → tối đa 2 exports đồng thời (hoặc 1 export + 3 reports).
+- **503 thay vì timeout**: client nhận response nhanh với retry hint.
+- **GORM + context**: cancel propagation từ HTTP request → DB query.
+
+**Lưu ý**:
+- **Timeout trong middleware**: 5s acquire timeout → nếu server quá busy, client nhận 503 trong 5s thay vì đợi mãi.
+- **Weighted semaphore lợi thế**: `/export` (weight=2) tự nhiên giới hạn ít concurrent hơn `/reports` (weight=1).
+- **Production**: thêm Prometheus metrics cho `sem` occupancy, 503 count.
+- So sánh với `rate.Limiter` (`x/time/rate`): rate limiter giới hạn requests/second, semaphore giới hạn concurrent. Chọn theo use case.
+
+---
+
 ## ④ PITFALLS
 
 | # | Lỗi | Fix |
@@ -323,3 +487,16 @@ func main() {
 |-------|------|
 | semaphore package | https://pkg.go.dev/golang.org/x/sync/semaphore |
 | Go x/sync repo | https://github.com/golang/sync |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Simple limiting** | `errgroup.SetLimit(n)` | Đơn giản hơn khi không cần weighted — xem [05-errgroup.md](./05-errgroup.md) |
+| **Buffered channel** | `make(chan struct{}, N)` | Lightweight semaphore cho simple cases |
+| **Rate limiter** | `x/time/rate` | Token bucket — giới hạn rate, không chỉ concurrency |
+| **HTTP middleware** | Semaphore + Gin/Echo middleware | Limit concurrent requests per route |
+| **DB connection** | Semaphore + GORM | Limit concurrent DB queries — xem [go-orm/01](../go-orm/01-models-and-connection.md) |
+| **Kết hợp Ants** | Ants pool (built-in limiting) | Worker pool = semaphore + goroutine reuse — xem [12-ants.md](./12-ants.md) |

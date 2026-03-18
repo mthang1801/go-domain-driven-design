@@ -204,3 +204,16 @@ func main() {
 |-------|------|
 | Workerpool GitHub | https://github.com/gammazero/workerpool |
 | Workerpool GoDoc | https://pkg.go.dev/github.com/gammazero/workerpool |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Need results** | Tunny `Process()` | Return values từ workers — xem [08](./08-worker-pool-tunny.md) |
+| **High-perf** | Ants | Auto-scale, pre-allocate — xem [12-ants.md](./12-ants.md) |
+| **Type-safe** | `sourcegraph/conc` | Generic ResultPool — xem [13-conc.md](./13-conc.md) |
+| **Distributed** | Asynq | Redis-backed task queue — xem [15-asynq.md](./15-asynq.md) |
+| **Backpressure** | Monitor WaitingQueueSize | Alert khi queue quá lớn |
+| **Batch + GORM** | Workerpool + GORM batch insert | Background data import — xem [go-orm/02](../go-orm/02-crud.md) |

@@ -374,6 +374,187 @@ func demonstrateUpdateDelete(db *gorm.DB) {
 
 ---
 
+### Example 4: Concurrent Bulk Import — errgroup + CreateInBatches
+
+**Mục tiêu**: Import 50K records từ API response. Chia data thành chunks → validate + transform concurrent bằng errgroup → CreateInBatches vào DB. Pattern phổ biến cho data sync, migration, bulk API operations.
+
+**Cần gì**: `gorm.io/gorm`, `golang.org/x/sync/errgroup`.
+
+**Có gì**: 50K contacts từ CRM API → validate email → normalize → batch insert 500/batch × 8 concurrent workers.
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "strings"
+    "sync/atomic"
+    "time"
+
+    "golang.org/x/sync/errgroup"
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+    "gorm.io/gorm/logger"
+)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GORM Model
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type Contact struct {
+    ID        uint   `gorm:"primarykey;autoIncrement"`
+    FirstName string `gorm:"column:first_name;size:100;not null"`
+    LastName  string `gorm:"column:last_name;size:100"`
+    Email     string `gorm:"column:email;uniqueIndex;size:255;not null"`
+    Phone     string `gorm:"column:phone;size:20"`
+    Source    string `gorm:"column:source;index;size:50"`
+}
+
+// RawContact: raw data từ API (chưa validate)
+type RawContact struct {
+    FirstName string
+    LastName  string
+    Email     string
+    Phone     string
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// validateAndTransform: validate + normalize raw contacts
+// Chạy trong goroutine — thread-safe (không shared state)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+func validateAndTransform(raws []RawContact, source string) []Contact {
+    valid := make([]Contact, 0, len(raws))
+    for _, raw := range raws {
+        // Validate
+        if raw.Email == "" || !strings.Contains(raw.Email, "@") {
+            continue
+        }
+        if raw.FirstName == "" {
+            continue
+        }
+
+        // Transform
+        valid = append(valid, Contact{
+            FirstName: strings.TrimSpace(raw.FirstName),
+            LastName:  strings.TrimSpace(raw.LastName),
+            Email:     strings.ToLower(strings.TrimSpace(raw.Email)),
+            Phone:     strings.TrimSpace(raw.Phone),
+            Source:    source,
+        })
+    }
+    return valid
+}
+
+func bulkImport(ctx context.Context, db *gorm.DB, allRaws []RawContact) error {
+    const (
+        chunkSize  = 500 // records per chunk
+        batchSize  = 100 // GORM batch insert size
+        maxWorkers = 8   // concurrent DB writers
+    )
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // Split data thành chunks
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    var chunks [][]RawContact
+    for i := 0; i < len(allRaws); i += chunkSize {
+        end := i + chunkSize
+        if end > len(allRaws) {
+            end = len(allRaws)
+        }
+        chunks = append(chunks, allRaws[i:end])
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // errgroup: concurrent validate + insert
+    // SetLimit(8): max 8 concurrent DB writes
+    // 1 chunk fail → cancel rest (WithContext)
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    eg, egCtx := errgroup.WithContext(ctx)
+    eg.SetLimit(maxWorkers)
+
+    var totalImported atomic.Int64
+    var totalSkipped atomic.Int64
+
+    for i, chunk := range chunks {
+        chunkIdx := i
+        chunkData := chunk // capture for closure
+
+        eg.Go(func() error {
+            // ━━━ Step 1: Validate + Transform (CPU-bound) ━━━
+            valid := validateAndTransform(chunkData, "crm_import")
+            totalSkipped.Add(int64(len(chunkData) - len(valid)))
+
+            if len(valid) == 0 {
+                return nil
+            }
+
+            // ━━━ Step 2: Batch Insert (IO-bound) ━━━
+            if err := db.WithContext(egCtx).CreateInBatches(valid, batchSize).Error; err != nil {
+                return fmt.Errorf("chunk %d: %w", chunkIdx, err)
+            }
+
+            totalImported.Add(int64(len(valid)))
+            log.Printf("✅ Chunk %d/%d: %d imported, %d skipped",
+                chunkIdx+1, len(chunks), len(valid), len(chunkData)-len(valid))
+            return nil
+        })
+    }
+
+    if err := eg.Wait(); err != nil {
+        return fmt.Errorf("bulk import failed: %w", err)
+    }
+
+    log.Printf("📊 Import complete: %d imported, %d skipped, %d total",
+        totalImported.Load(), totalSkipped.Load(),
+        totalImported.Load()+totalSkipped.Load())
+    return nil
+}
+
+func main() {
+    dsn := "host=localhost user=app dbname=crm port=5432 sslmode=disable"
+    db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
+        SkipDefaultTransaction: true,
+        Logger:                 logger.Default.LogMode(logger.Warn),
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    db.AutoMigrate(&Contact{})
+
+    // Simulate 50K raw contacts from API
+    raws := make([]RawContact, 50000)
+    for i := range raws {
+        raws[i] = RawContact{
+            FirstName: fmt.Sprintf("User%d", i),
+            Email:     fmt.Sprintf("user%d@example.com", i),
+        }
+    }
+
+    ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+    defer cancel()
+
+    if err := bulkImport(ctx, db, raws); err != nil {
+        log.Fatal(err)
+    }
+}
+```
+
+**Kết quả đạt được**:
+- **50K records → 100 chunks × 500 records**, 8 concurrent workers.
+- **Validate + Transform** chạy parallel (CPU-bound) → filter invalid records.
+- **CreateInBatches** tối ưu DB writes (100 records/INSERT thay vì 1).
+- **Error propagation**: 1 chunk fail → cancel rest (errgroup WithContext).
+
+**Lưu ý**:
+- **SkipDefaultTransaction**: tắt auto-tx cho batch insert → ~30% nhanh hơn.
+- **chunkSize vs batchSize**: `chunkSize=500` (records per worker), `batchSize=100` (records per INSERT SQL).
+- **Duplicate handling**: nếu email conflict → dùng `clause.OnConflict` thay vì `Create` (xem [06-migration-and-advanced.md](./06-migration-and-advanced.md)).
+- **atomic counters**: `totalImported`, `totalSkipped` — thread-safe progress tracking.
+- Kết hợp Ants pool thay errgroup nếu cần goroutine reuse cho 100K+ imports — xem [goroutines/12](../goroutines/12-ants.md).
+
+---
+
 ## ④ PITFALLS
 
 | # | Lỗi | Fix |
@@ -394,3 +575,16 @@ func demonstrateUpdateDelete(db *gorm.DB) {
 | GORM — Query | https://gorm.io/docs/query.html |
 | GORM — Update | https://gorm.io/docs/update.html |
 | GORM — Delete | https://gorm.io/docs/delete.html |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Batch + concurrency** | `errgroup` + `CreateInBatches` | Parallel batch insert — xem [goroutines/05](../goroutines/05-errgroup.md) |
+| **Upsert** | `db.Clauses(clause.OnConflict{})` | Insert or Update atomic — xem [06-migration-and-advanced.md](./06-migration-and-advanced.md) |
+| **Soft delete** | `gorm.io/plugin/soft_delete` | UnixTimestamp soft delete thay vì boolean |
+| **Worker pool + CRUD** | Ants/Tunny + GORM | Background bulk operations — xem [goroutines/12](../goroutines/12-ants.md) |
+| **Validation** | `go-playground/validator` | Validate struct trước khi GORM Create |
+| **Audit log** | GORM Hooks + event channel | Track changes qua channels — xem [05-transactions-and-hooks.md](./05-transactions-and-hooks.md) |

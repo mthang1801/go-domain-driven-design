@@ -344,6 +344,130 @@ func main() {
 
 ---
 
+### Example 4: Multi-Database + DBResolver — Read/Write Splitting
+
+**Mục tiêu**: Production pattern: Primary (write) + 2 Replicas (read) — GORM tự route queries. Kết hợp DBResolver plugin + connection pool + Prometheus monitoring.
+
+**Cần gì**: `gorm.io/gorm`, `gorm.io/plugin/dbresolver`, `gorm.io/driver/postgres`.
+
+**Có gì**: 1 primary PostgreSQL (writes) + 2 replica PostgreSQL (reads). GORM auto-route: `Create/Update/Delete → primary`, `Find/First → replica`.
+
+```go
+package database
+
+import (
+    "fmt"
+    "log"
+    "time"
+
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+    "gorm.io/plugin/dbresolver"
+)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// DBConfig: config cho multi-database setup
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type DBConfig struct {
+    PrimaryDSN  string   // Write traffic
+    ReplicaDSNs []string // Read traffic (load balanced)
+}
+
+func NewMultiDB(cfg DBConfig) (*gorm.DB, error) {
+    // ━━━ Primary connection ━━━
+    db, err := gorm.Open(postgres.Open(cfg.PrimaryDSN), &gorm.Config{
+        SkipDefaultTransaction: true,
+        PrepareStmt:            true,
+    })
+    if err != nil {
+        return nil, fmt.Errorf("primary connection failed: %w", err)
+    }
+
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // DBResolver plugin: auto read/write splitting
+    //
+    // Sources  = Primary (write):  Create, Update, Delete, raw Exec
+    // Replicas = Read replicas:    Find, First, Last, Scan, raw Query
+    //
+    // Policy: RandomPolicy = load balance giữa replicas
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    replicas := make([]gorm.Dialector, len(cfg.ReplicaDSNs))
+    for i, dsn := range cfg.ReplicaDSNs {
+        replicas[i] = postgres.Open(dsn)
+    }
+
+    err = db.Use(dbresolver.Register(dbresolver.DBResolverConfig{
+        Sources:  []gorm.Dialector{postgres.Open(cfg.PrimaryDSN)},
+        Replicas: replicas,
+        Policy:   dbresolver.RandomPolicy{}, // round-robin giữa replicas
+    }).
+        SetMaxOpenConns(25).
+        SetMaxIdleConns(10).
+        SetConnMaxLifetime(5 * time.Minute).
+        SetConnMaxIdleTime(1 * time.Minute))
+
+    if err != nil {
+        return nil, fmt.Errorf("dbresolver setup failed: %w", err)
+    }
+
+    log.Printf("✅ Multi-DB connected: 1 primary + %d replicas", len(cfg.ReplicaDSNs))
+    return db, nil
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Usage: auto-routing — transparent cho application code
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+func example(db *gorm.DB) {
+    // ━━━ Write → Primary ━━━
+    user := User{Name: "Alice", Email: "alice@example.com"}
+    db.Create(&user) // → routed to Primary
+
+    // ━━━ Read → Replica ━━━
+    var users []User
+    db.Find(&users)  // → routed to Replica (random)
+
+    // ━━━ Force primary cho read-after-write consistency ━━━
+    db.Clauses(dbresolver.Write).First(&user, 1) // → forced to Primary
+
+    // ━━━ Transaction → luôn dùng Primary ━━━
+    db.Transaction(func(tx *gorm.DB) error {
+        tx.Create(&Order{UserID: user.ID, TotalAmount: 100})
+        tx.First(&user, user.ID) // ← trong tx → Primary (not replica)
+        return nil
+    })
+}
+
+func main() {
+    cfg := DBConfig{
+        PrimaryDSN: "host=primary.db user=app dbname=myapp port=5432 sslmode=disable",
+        ReplicaDSNs: []string{
+            "host=replica1.db user=app dbname=myapp port=5432 sslmode=disable",
+            "host=replica2.db user=app dbname=myapp port=5432 sslmode=disable",
+        },
+    }
+
+    db, err := NewMultiDB(cfg)
+    if err != nil {
+        log.Fatal(err)
+    }
+    example(db)
+}
+```
+
+**Kết quả đạt được**:
+- **Auto read/write splitting**: application code không cần thay đổi — GORM tự route.
+- **Load balanced reads**: `RandomPolicy` phân tải giữa replicas.
+- **Force primary**: `dbresolver.Write` cho read-after-write consistency.
+- **Transaction safety**: tất cả operations trong tx → Primary.
+
+**Lưu ý**:
+- **Replication lag**: replica có thể chậm vài ms → read-after-write cần `dbresolver.Write`.
+- **Connection pool per source**: mỗi primary/replica có pool riêng (25 + 25 + 25 connections).
+- **Failover**: DBResolver KHÔNG auto-failover — dùng PgBouncer hoặc HAProxy trước.
+- Kết hợp với `semaphore` để limit concurrent heavy queries — xem [goroutines/10](../goroutines/10-semaphore.md).
+
+---
+
 ## ④ PITFALLS
 
 | # | Lỗi | Fix |
@@ -363,3 +487,16 @@ func main() {
 | GORM Docs — Models | https://gorm.io/docs/models.html |
 | GORM Docs — Connecting | https://gorm.io/docs/connecting_to_a_database.html |
 | GORM Docs — Conventions | https://gorm.io/docs/conventions.html |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Connection pool** | `sql.DB.SetMaxOpenConns` + semaphore | Coordinate app-level + DB-level concurrency — xem [goroutines/10](../goroutines/10-semaphore.md) |
+| **Context** | `db.WithContext(ctx)` | Mọi query nên truyền context — xem [goroutines/03](../goroutines/03-context.md) |
+| **Lightweight ORM** | `sqlx` / `sqlc` | Code-generated queries — performance tốt hơn cho simple cases |
+| **Multi-DB** | `gorm.io/driver/postgres` + `mysql` + `sqlite` | GORM hỗ trợ swap driver không đổi code |
+| **Config management** | `viper` + `godotenv` | Manage DSN từ env variables |
+| **Monitoring** | GORM Logger + Prometheus plugin | Track query duration, slow queries |

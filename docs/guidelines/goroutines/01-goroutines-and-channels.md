@@ -458,3 +458,16 @@ loop:
 | Effective Go — Concurrency | https://go.dev/doc/effective_go#concurrency |
 | Go Blog — Share Memory By Communicating | https://go.dev/blog/codelab-share |
 | Go Blog — Pipelines and Cancellation | https://go.dev/blog/pipelines |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Thay thế done channel** | `context.Context` | Production standard — xem [03-context.md](./03-context.md) |
+| **Fan-out channels** | `errgroup` + `semaphore` | Giới hạn concurrent goroutines — xem [05-errgroup.md](./05-errgroup.md) |
+| **Channel + HTTP** | `net/http` + goroutines | Mỗi request tự goroutine; dùng channel cho aggregation |
+| **Channel monitoring** | `runtime.NumGoroutine()` | Detect goroutine leaks trong tests |
+| **Structured concurrency** | `sourcegraph/conc` | Type-safe pools, panic recovery — xem [13-conc.md](./13-conc.md) |
+| **Distributed channels** | NATS, Redis Streams, Kafka | Khi cần cross-process communication |

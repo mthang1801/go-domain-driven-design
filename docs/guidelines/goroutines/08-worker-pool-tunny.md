@@ -488,3 +488,16 @@ func main() {
 | Tunny GitHub | https://github.com/Jeffail/tunny |
 | Tunny GoDoc | https://pkg.go.dev/github.com/Jeffail/tunny |
 | Go Worker Pool Pattern | https://gobyexample.com/worker-pools |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **High-perf alternative** | Ants | Auto-scale, pre-allocate, panic recovery — xem [12-ants.md](./12-ants.md) |
+| **Typed pool** | `sourcegraph/conc` ResultPool | Generic results, no interface{} — xem [13-conc.md](./13-conc.md) |
+| **Distributed workers** | Machinery / Asynq | Cross-process worker pool với Redis — xem [15-asynq.md](./15-asynq.md) |
+| **Buffer reuse** | Tunny + sync.Pool | Workers reuse goroutines + Pool reuse buffers — xem [04-sync-pool.md](./04-sync-pool.md) |
+| **Rate limiting** | Tunny + `x/time/rate` | Token bucket rate limiter trước worker pool |
+| **HTTP handler pool** | Tunny + Gin/Echo | Limit concurrent request processing |

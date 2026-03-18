@@ -390,3 +390,17 @@ func main() {
 | sync package | https://pkg.go.dev/sync |
 | sync/atomic | https://pkg.go.dev/sync/atomic |
 | Go Memory Model | https://go.dev/ref/mem |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Thay thế Mutex** | `sync.Map` | Built-in concurrent map — tốt cho cache key-value đơn giản |
+| **Thay thế Mutex cho counter** | `atomic.Int64` | 2-5x nhanh hơn Mutex cho single var |
+| **Lock-free queue** | `github.com/enriquebris/goconcurrentqueue` | Lock-free FIFO queue |
+| **Distributed lock** | Redis `SETNX` / `Redlock` | Cross-process locking |
+| **Testing** | `go test -race -count=100` | Chạy nhiều lần để phát hiện rare races |
+| **Profiling** | `go tool pprof -mutex` | Detect mutex contention |
+| **Kết hợp GORM** | RWMutex + in-memory cache + GORM | Cache DB reads, mutex cho consistency — xem [go-orm/06-migration-and-advanced.md](../go-orm/06-migration-and-advanced.md) |

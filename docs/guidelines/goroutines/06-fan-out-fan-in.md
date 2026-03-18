@@ -397,3 +397,16 @@ func main() {
 | Go Blog — Pipelines and Cancellation | https://go.dev/blog/pipelines |
 | Go Concurrency Patterns (Rob Pike) | https://go.dev/talks/2012/concurrency.slide |
 | Concurrency in Go (O'Reilly) | ISBN: 978-1491941195 |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Worker pool thay fan-out** | Ants / Tunny | Reuse goroutines + limit concurrency — xem [12-ants.md](./12-ants.md) |
+| **Typed fan-out** | `conc.iter.Map` | Type-safe, order-preserved parallel map — xem [13-conc.md](./13-conc.md) |
+| **Distributed fan-out** | Kafka partitions / NATS JetStream | Cross-process fan-out cho microservices |
+| **Ordered fan-in** | Heap merge / indexed results | Khi cần preserve order sau fan-in |
+| **GORM + fan-out** | Parallel query từ nhiều tables | errgroup fan-out → merge results |
+| **Observability** | OpenTelemetry spans per worker | Trace fan-out latency distribution |

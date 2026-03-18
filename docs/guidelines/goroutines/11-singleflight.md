@@ -359,6 +359,165 @@ func main() {
 
 ---
 
+### Example 4: Singleflight + Redis + GORM — Production 3-Layer Cache
+
+**Mục tiêu**: Production pattern hoàn chỉnh: Redis cache (L1) → singleflight (dedup) → GORM query (DB). Kết hợp 3 kỹ thuật: caching, deduplication, và ORM. Phổ biến trong API servers high-traffic.
+
+**Cần gì**: `golang.org/x/sync/singleflight`, `github.com/redis/go-redis/v9`, `gorm.io/gorm`.
+
+**Có gì**: Product API — GET `/products/:id` nhận hàng ngàn requests/giây. Redis cache 30s TTL, singleflight deduplicate, GORM query PostgreSQL.
+
+```go
+package main
+
+import (
+    "context"
+    "encoding/json"
+    "fmt"
+    "log"
+    "time"
+
+    "github.com/redis/go-redis/v9"
+    "golang.org/x/sync/singleflight"
+    "gorm.io/driver/postgres"
+    "gorm.io/gorm"
+)
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// GORM Model
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type Product struct {
+    ID          uint      `gorm:"primarykey" json:"id"`
+    Name        string    `gorm:"column:name" json:"name"`
+    Price       float64   `gorm:"column:price" json:"price"`
+    Category    string    `gorm:"column:category;index" json:"category"`
+    Stock       int       `gorm:"column:stock" json:"stock"`
+    UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ProductService: 3-layer lookup
+//   Layer 1: Redis cache (fast, 30s TTL)
+//   Layer 2: Singleflight (dedup concurrent DB calls)
+//   Layer 3: GORM → PostgreSQL (source of truth)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+type ProductService struct {
+    db    *gorm.DB
+    rdb   *redis.Client
+    group singleflight.Group
+}
+
+func NewProductService(db *gorm.DB, rdb *redis.Client) *ProductService {
+    return &ProductService{db: db, rdb: rdb}
+}
+
+func (s *ProductService) GetProduct(ctx context.Context, productID uint) (*Product, error) {
+    cacheKey := fmt.Sprintf("product:%d", productID)
+
+    // ━━━ Layer 1: Redis Cache ━━━
+    // Redis GET: ~0.5ms vs DB query ~5-50ms
+    cached, err := s.rdb.Get(ctx, cacheKey).Bytes()
+    if err == nil {
+        var product Product
+        if json.Unmarshal(cached, &product) == nil {
+            log.Printf("[Redis HIT] product:%d", productID)
+            return &product, nil
+        }
+    }
+    // Redis MISS hoặc unmarshal fail → tiếp
+
+    // ━━━ Layer 2: Singleflight — deduplicate concurrent DB queries ━━━
+    // 1000 requests cho cùng product → chỉ 1 DB query
+    val, err, shared := s.group.Do(cacheKey, func() (interface{}, error) {
+        // Double-check Redis (goroutine khác có thể đã set)
+        if cached, err := s.rdb.Get(ctx, cacheKey).Bytes(); err == nil {
+            var product Product
+            if json.Unmarshal(cached, &product) == nil {
+                return &product, nil
+            }
+        }
+
+        // ━━━ Layer 3: GORM → PostgreSQL ━━━
+        var product Product
+        if err := s.db.WithContext(ctx).First(&product, productID).Error; err != nil {
+            return nil, fmt.Errorf("product %d not found: %w", productID, err)
+        }
+        log.Printf("[DB QUERY] product:%d (name=%s, price=%.2f)", productID, product.Name, product.Price)
+
+        // Set Redis cache — async (không block response)
+        go func() {
+            data, _ := json.Marshal(product)
+            if err := s.rdb.Set(context.Background(), cacheKey, data, 30*time.Second).Err(); err != nil {
+                log.Printf("[Redis SET Error] %v", err)
+            }
+        }()
+
+        return &product, nil
+    })
+
+    if err != nil {
+        return nil, err
+    }
+
+    if shared {
+        log.Printf("[Singleflight SHARED] product:%d — result from another goroutine", productID)
+    }
+
+    return val.(*Product), nil
+}
+
+// InvalidateCache: gọi khi product update
+func (s *ProductService) InvalidateCache(ctx context.Context, productID uint) {
+    cacheKey := fmt.Sprintf("product:%d", productID)
+    s.rdb.Del(ctx, cacheKey)
+    s.group.Forget(cacheKey) // ← clear singleflight để query mới chạy
+}
+
+func main() {
+    // Setup GORM
+    dsn := "host=localhost user=app dbname=shop port=5432 sslmode=disable"
+    db, _ := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+    db.AutoMigrate(&Product{})
+
+    // Setup Redis
+    rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+
+    svc := NewProductService(db, rdb)
+
+    ctx := context.Background()
+
+    // Simulate: 100 concurrent requests cho product #42
+    // Kỳ vọng: 1 DB query, 1 Redis SET, 99 singleflight shares, sau đó cache hit
+    for i := 0; i < 100; i++ {
+        go func() {
+            product, err := svc.GetProduct(ctx, 42)
+            if err != nil {
+                log.Printf("❌ %v", err)
+                return
+            }
+            _ = product
+        }()
+    }
+
+    time.Sleep(2 * time.Second)
+}
+```
+
+**Kết quả đạt được**:
+- **3 layers**: Redis (~0.5ms) → singleflight (0ms, shared) → DB (~5-50ms).
+- **100 concurrent requests → 1 DB query**, 1 Redis SET, 99 shared results.
+- Sau cache warm: mọi requests trả từ Redis (~0.5ms).
+- **Cache invalidation**: `InvalidateCache()` clear cả Redis + singleflight.
+
+**Lưu ý**:
+- **Async Redis SET**: `go func()` set cache — không block response. Nếu fail → next request query DB lại.
+- **Double-check** bên trong singleflight — tránh DB query nếu goroutine khác đã set Redis.
+- **`Forget(key)`** quan trọng khi invalidate — nếu không, requests tiếp đợi goroutine cũ (đã stale).
+- **Redis TTL 30s** là trade-off. Ngắn hơn → data fresher. Dài hơn → fewer DB queries. Tune theo use case.
+- So sánh: `patrickmn/go-cache` cho in-process cache (single instance), Redis cho multi-instance.
+
+---
+
 ## ④ PITFALLS
 
 | # | Lỗi | Fix |
@@ -376,3 +535,16 @@ func main() {
 |-------|------|
 | singleflight package | https://pkg.go.dev/golang.org/x/sync/singleflight |
 | Blog — Preventing thundering herds | https://www.calhoun.io/using-singleflight-to-deduplicate-requests/ |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **L1 Cache** | `patrickmn/go-cache` / Redis | Time-based cache — combine với singleflight |
+| **GORM cache** | Singleflight + GORM query | Deduplicate concurrent DB reads — xem [go-orm/03](../go-orm/03-querying.md) |
+| **gRPC** | Singleflight + gRPC client | Deduplicate concurrent RPC calls |
+| **HTTP cache** | `singleflight` + `ResponseWriter` | Cache HTTP responses cho same-key requests |
+| **Distributed** | Redis `SETNX` + channel | Cross-process singleflight |
+| **Monitoring** | Prometheus counter `shared_results` | Đo hiệu quả deduplication |

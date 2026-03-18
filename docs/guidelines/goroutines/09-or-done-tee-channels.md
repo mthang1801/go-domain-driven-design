@@ -573,3 +573,16 @@ func main() {
 | Concurrency in Go (O'Reilly) Ch.4 | ISBN: 978-1491941195 |
 | Go Blog — Advanced Concurrency | https://go.dev/talks/2013/advconc.slide |
 | Go Concurrency Patterns (Rob Pike) | https://go.dev/talks/2012/concurrency.slide |
+
+---
+
+## ⑥ RECOMMEND
+
+| Loại | Đề xuất | Ghi chú |
+|------|---------|---------|
+| **Simplified or-done** | `context.Context` | Context cancel = or-done cho hầu hết cases |
+| **Typed tee** | `conc.iter.ForEach` + channels | Type-safe broadcast — xem [13-conc.md](./13-conc.md) |
+| **Pub/Sub** | Redis Pub/Sub / NATS | Distributed tee channel — cross-service broadcast |
+| **Event sourcing** | Watermill + tee | Split event stream cho audit + processing |
+| **Fan-out combine** | Or-done + fan-out | Graceful shutdown cho multi-worker systems |
+| **Testing** | `goleak` package | Detect goroutine leaks từ or-done patterns |
