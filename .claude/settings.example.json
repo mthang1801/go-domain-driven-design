@@ -1,0 +1,113 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Example Claude Code settings. Copy to ~/.claude/settings.json and customize.",
+
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/pre-dangerous-command-guard.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Write|Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/pre-context-loader.sh"
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-prettier-format.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-eslint-check.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-security-scan.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-console-log-warn.sh"
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/stop-audit-summary.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/stop-changelog-reminder.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/skills/continuous-learning/evaluate-session.sh"
+                    }
+                ]
+            }
+        ]
+    },
+
+    "allowedTools": [
+        "Read",
+        "Write",
+        "Edit",
+        "Glob",
+        "Grep",
+        "Bash",
+        "Task",
+        "TodoRead",
+        "TodoWrite"
+    ],
+
+    "model": "claude-sonnet-4-20250514",
+
+    "contextManagement": {
+        "compactThreshold": 80,
+        "autoCompact": true
+    }
+}

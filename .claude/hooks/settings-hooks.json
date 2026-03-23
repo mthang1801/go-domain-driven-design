@@ -1,0 +1,85 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "description": "Hooks configuration for Claude Code / Agent integration. Copy relevant sections into ~/.claude/settings.json",
+
+    "hooks": {
+        "PreToolUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/pre-dangerous-command-guard.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Write|Edit",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/pre-context-loader.sh"
+                    }
+                ]
+            }
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-prettier-format.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-eslint-check.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-security-scan.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "Edit|Write",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-console-log-warn.sh"
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/stop-audit-summary.sh"
+                    }
+                ]
+            },
+            {
+                "matcher": "*",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/stop-changelog-reminder.sh"
+                    }
+                ]
+            }
+        ]
+    }
+}

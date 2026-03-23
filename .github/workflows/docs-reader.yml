@@ -1,0 +1,129 @@
+# ═══════════════════════════════════════════════════════
+# GitHub Actions — CI/CD Pipeline
+# Build, test, push, and deploy Docs Reader
+# ═══════════════════════════════════════════════════════
+
+name: CI/CD — Docs Reader
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'documents/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'documents/**'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}/docs-reader
+
+jobs:
+  # ─── Lint & Validate ───
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Install dependencies
+        working-directory: documents/reader
+        run: pnpm install
+
+      - name: Check markdown files exist
+        run: |
+          count=$(find documents/guidelines -name "*.md" | wc -l)
+          echo "📄 Found ${count} markdown files"
+          if [ "$count" -eq 0 ]; then
+            echo "❌ No markdown files found!"
+            exit 1
+          fi
+
+      - name: Start server & smoke test
+        working-directory: documents/reader
+        run: |
+          node server.js &
+          sleep 3
+
+          # Test API endpoints
+          echo "Testing /api/tree..."
+          curl -sf http://localhost:6868/api/tree | head -c 200
+          echo ""
+
+          echo "Testing /api/search..."
+          curl -sf "http://localhost:6868/api/search?q=algorithm" | head -c 200
+          echo ""
+
+          echo "Testing /api/content..."
+          curl -sf "http://localhost:6868/api/content?path=guidelines/README.md" | head -c 200
+          echo ""
+
+          echo "✅ All smoke tests passed!"
+
+  # ─── Build & Push Docker Image ───
+  build-push:
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest
+
+      - name: Build & Push
+        uses: docker/build-push-action@v5
+        with:
+          context: documents
+          file: documents/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─── Deploy (optional — uncomment for auto-deploy) ───
+  # deploy:
+  #   needs: build-push
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+  #   steps:
+  #     - name: Deploy to VPS
+  #       uses: appleboy/ssh-action@v1
+  #       with:
+  #         host: ${{ secrets.VPS_HOST }}
+  #         username: ${{ secrets.VPS_USER }}
+  #         key: ${{ secrets.VPS_SSH_KEY }}
+  #         script: |
+  #           cd /opt/docs-reader
+  #           docker compose pull
+  #           docker compose up -d
+  #           docker compose ps
